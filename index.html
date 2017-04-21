@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      h2 {
+        display: inline-block;
+        padding-right: 7px;
+        font-family:"Roboto", Helvetica, Arial, sans-serif;
+      }
+      audio {
+        display: inline-block;
+        vertical-align: middle;
+      }
+      
+      body {
+        background-color:#000;
+        color:#fff;
+      }
+    </style>
+    <title>Spectral Waveform</title>
+  </head>
+  <body>
+    <div>
+      <h2>Music:</h2><audio src="./Track 3.mp3" controls></audio>
+    </div>
+    <div>
+      <input type="checkbox" id="sine-control"/>
+      <input min="10" max="140" type="range" id="sine-freq" name="sine-freq" style="width:256px;"/>
+      <input min="0" max="1" type="range" id="sine-vol" step="0.01"/>
+      <select id="oscillator-shape">
+        <option>sine</option>
+        <option>square</option>
+        <option>sawtooth</option>
+        <option>triangle</option>
+      </select>
+      <label id="sine-freq-label"></label>
+    </div>
+    <canvas id="history-canvas" style="height:128px; width:1024px"></canvas>
+    <canvas id="bar-canvas" style="height:128px; width:1024px"></canvas>
+    <canvas id="wave-canvas" style="height:128px; width:1024px"></canvas>
+    
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+    <script src="/script.js"></script>
+  </body>
+</html>
