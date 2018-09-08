@@ -1,14 +1,16 @@
 var context = new (window.AudioContext || window.webkitAudioContext)();
 
-var SMOOTHING = 0.5;
+var SMOOTHING = 0.25;
+
+var AVERAGING = 25;
+var STDEVS = 5;
 
 var AUDIOS = document.getElementsByTagName("audio");
+
 var HIST_CANVAS = document.getElementById("history-canvas");
-var HIST_CTX = HIST_CANVAS.getContext("2d");
 var BAR_CANVAS = document.getElementById("bar-canvas");
-var BAR_CTX = BAR_CANVAS.getContext("2d");
 var WAVE_CANVAS = document.getElementById("wave-canvas");
-var WAVE_CTX = WAVE_CANVAS.getContext("2d");
+var FILT_CANVAS = document.getElementById("filt-canvas");
 
 var WIDTH = 1024;
 var HEIGHT = 128;
@@ -19,19 +21,15 @@ var BAR_SPACE = 2;
 var MAX_LIGHT = 1;
 var MIN_VALUE = 0.1;
 
+var BAND_PASS = true;
+var Q = 50;
+
 function initializeCanvas(cvs, ctx) {
   cvs.width = WIDTH;
   cvs.height = HEIGHT;
-  ctx.fillstyle = "#000";
+  ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 }
-
-initializeCanvas(HIST_CANVAS, HIST_CTX);
-initializeCanvas(BAR_CANVAS, BAR_CTX);
-initializeCanvas(WAVE_CANVAS, WAVE_CTX);
-
-//BAR_CTX.fillStyle = "#fff";
-//BAR_CTX.fillRect((128 * BAR_WIDTH) + (129 * BAR_SPACE), 0, WIDTH, HEIGHT);
 
 var FFT_SIZE = 2 * HEIGHT;
 
@@ -44,17 +42,238 @@ sineFreqControl.addEventListener("change", function(e) {
   sineFreqLabel.innerText = "Frequency: " + Math.pow(2, (sineFreqControl.value / 10)) + "Hz";
 });
 
+function colorForVal(perc) {
+  let hue = Math.max(240 - (300 * perc), 0);
+  let sat = 1 / (1 + Math.pow(Math.E, -25 * (perc - 0.15)));
+  let light = 0.5 / (1 + Math.pow(Math.E, -25 * (perc - 0.85))) + 0.5;
+  light = perc > MIN_VALUE ? Math.min(light, MAX_LIGHT) : 0;
+  //sat = 1;
+  return `hsl(${hue}, ${sat * 100}%, ${light * 90}%)`;
+}
+
+function colorForVal2(perc) {
+  let hue = Math.max(240 - (300 * perc), 0);
+  let sat = 1 / (1 + Math.pow(Math.E, -25 * (perc - 0.15)));
+  let light = 0.5 / (1 + Math.pow(Math.E, -10 * (perc - 0.5))) + 0.5;
+  return `hsl(${hue}, ${sat * 100}%, ${light * 50}%)`;
+}
+
+class AnalyzerDisplay {
+  constructor(analyser, canvas) {
+    this.analyser = analyser;
+    this.canvas = canvas;
+    this.ctx = this.canvas.getContext("2d");
+    initializeCanvas(this.canvas, this.ctx);
+    
+    this.freqs = new Uint8Array(this.analyser.frequencyBinCount);
+    this.peaks = new Uint8Array(this.analyser.frequencyBinCount);
+    
+    this.render.bind(this);
+  }
+  
+  render() {
+    this.ctx.fillStyle = "#000";
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    
+    this.analyser.getByteFrequencyData(this.freqs);
+    
+    let h = this.canvas.height;
+    for (let i = 0; i < this.analyser.frequencyBinCount; i++) {
+      let val = this.freqs[i];
+      let perc = val / 255;
+      this.ctx.fillStyle = colorForVal(perc);
+      this.ctx.fillRect(i * (BAR_WIDTH + BAR_SPACE) + BAR_SPACE, h * (1 - perc), BAR_WIDTH, h * perc);
+      
+      if (this.peaks[i] > val) {
+        this.peaks[i] += (val - this.peaks[i]) / AVERAGING;
+        
+      } else {
+        this.peaks[i] = val;
+      }
+      perc = this.peaks[i] / 255;
+      this.ctx.fillStyle = colorForVal(perc);
+      this.ctx.fillRect(i * (BAR_WIDTH + BAR_SPACE) + BAR_SPACE, h * (1 - perc) - 1, BAR_WIDTH, 2);
+    }
+  }
+}
+
+class PeakDisplay {
+  constructor(analyser, canvas) {
+    this.analyser = analyser;
+    this.canvas = canvas;
+    this.ctx = this.canvas.getContext("2d");
+    initializeCanvas(this.canvas, this.ctx);
+    
+    this.freqs = new Uint8Array(this.analyser.frequencyBinCount);
+    this.times = new Uint8Array(this.analyser.frequencyBinCount);
+    this.avgs = new Uint8Array(this.analyser.frequencyBinCount);
+    this.ampavg = 0;
+  }
+  
+  render() {
+    this.ctx.fillStyle = "#000";
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    
+    this.analyser.getByteFrequencyData(this.freqs);
+    this.analyser.getByteTimeDomainData(this.times);
+    
+    let amp = 0;
+    //for (let i = 0; i < this.analyser.frequencyBinCount; i++) amp = Math.max(amp, Math.abs(this.times[i] - 127));
+    for (let i = 0; i < this.analyser.frequencyBinCount; i++) amp += Math.abs(this.times[i] - 127);
+    amp /= this.analyser.frequencyBinCount;
+    this.ampavg += (amp - this.ampavg) / AVERAGING;
+    amp /= 127;
+    amp = amp - (this.ampavg / 127);
+    
+    let h = this.canvas.height;
+    for (let i = 0; i < this.analyser.frequencyBinCount; i++) {
+      let val = this.freqs[i];
+      let avg = this.avgs[i];
+      this.avgs[i] += (val - avg) / AVERAGING;
+      
+      val = Math.pow(val, 2) / 255;
+      avg = Math.pow(avg, 2) / 255;
+      //let perc = Math.max(0, (val - avg) / (255 - avg));
+      
+      //let perc = Math.abs(val - avg) / ((val + avg) / 2);
+      //perc = 1 / (1 + Math.pow(Math.E, -10 * (perc - 0.5)))
+      
+      //let perc = 1 - Math.pow((val - avg) - 1, 2 * amp / 127);
+      
+      let perc = (val - avg) * amp;
+      
+      this.ctx.fillStyle = colorForVal(perc);
+      this.ctx.fillRect(i * (BAR_WIDTH + BAR_SPACE) + BAR_SPACE, h * (1 - perc), BAR_WIDTH, h * perc);
+    }
+  }
+}
+
+class PeakDisplay2 {
+  constructor(analyser, canvas) {
+    this.analyser = analyser;
+    this.canvas = canvas;
+    this.ctx = this.canvas.getContext("2d");
+    initializeCanvas(this.canvas, this.ctx);
+    
+    this.freqs = new Uint8Array(this.analyser.frequencyBinCount);
+    this.avgs = new Uint8Array(this.analyser.frequencyBinCount);
+    this.avgDifs = new Uint8Array(this.analyser.frequencyBinCount);
+  }
+  
+  render() {
+    this.ctx.fillStyle = "#000";
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    
+    this.analyser.getByteFrequencyData(this.freqs);
+    
+    let h = this.canvas.height;
+    for (let i = 0; i < this.analyser.frequencyBinCount; i++) {
+      let val = this.freqs[i];
+      let avg = this.avgs[i];
+      let avgDif = this.avgDifs[i];
+      let dif = val - avg;
+      
+      this.avgs[i] += (val - avg) / AVERAGING;
+      this.avgDifs[i] += (Math.abs(dif) - avgDif) / AVERAGING;
+      
+      val /= 255;
+      avg /= 255;
+      avgDif /= 255;
+      
+      let perc = 1 / (1 + Math.pow(Math.E, -10 * (((val - avg) / (avgDif * STDEVS)) - 0.5)));
+      //let perc = (val - avg) / (avgDif * STDEVS);
+      
+      this.ctx.fillStyle = colorForVal(perc);
+      this.ctx.fillRect(i * (BAR_WIDTH + BAR_SPACE) + BAR_SPACE, h * (1 - perc), BAR_WIDTH, h * perc);
+    }
+  }
+}
+
+class WaveFormDisplay {
+  constructor(analyser, canvas) {
+    this.analyser = analyser;
+    this.canvas = canvas;
+    this.ctx = this.canvas.getContext("2d");
+    initializeCanvas(this.canvas, this.ctx);
+    
+    this.times = new Uint8Array(this.analyser.frequencyBinCount);
+    
+    this.render.bind(this);
+  }
+  
+  render() {
+    let w = this.canvas.width;
+    let h = this.canvas.height;
+    this.ctx.fillStyle = "#000";
+    this.ctx.fillRect(0, 0, w, h);
+    
+    this.analyser.getByteTimeDomainData(this.times);
+    
+    let thick = w / (this.analyser.frequencyBinCount - 1);
+    let largest = 0.5;
+    this.ctx.beginPath();
+    this.ctx.lineWidth = 2;
+    this.ctx.moveTo(-1 * thick, 0.5 * h);
+    
+    for (let i = 0; i < this.analyser.frequencyBinCount; i++) {
+      let val = this.times[i];
+      let perc = val / 255;
+      if (Math.abs(val - 128) > largest) largest = Math.abs(val - 127);
+      this.ctx.lineTo(i * thick, perc * h);
+    }
+    
+    this.ctx.strokeStyle = colorForVal2(largest / 127);
+    this.ctx.stroke();
+  }
+}
+
+class HistoryDisplay {
+  constructor(analyser, canvas) {
+    this.analyser = analyser;
+    this.canvas = canvas;
+    this.ctx = this.canvas.getContext("2d");
+    initializeCanvas(this.canvas, this.ctx);
+    
+    this.freqs = new Uint8Array(this.analyser.frequencyBinCount);
+    this.x = 0;
+    
+    this.render.bind(this);
+  }
+  
+  render() {
+    this.x++;
+    this.x %= this.canvas.width;
+    
+    this.ctx.fillStyle = "#f00";
+    this.ctx.fillRect(this.x + 1, 1, 1, this.canvas.height)
+    
+    this.analyser.getByteFrequencyData(this.freqs);
+    
+    let h = this.canvas.height;
+    for (let i = 0; i < this.analyser.frequencyBinCount; i++) {
+      let val = this.freqs[i];
+      let perc = val / 255;
+      this.ctx.fillStyle = colorForVal(perc);
+      this.ctx.fillRect(this.x, this.canvas.height - i, 1, 1);
+    }
+  }
+}
+
 function SpectralDisplay() {
   this.analyser = context.createAnalyser();
+  this.bandAnalyser = context.createAnalyser();
   
   this.analyser.minDecibels = -120;
   this.analyser.maxDecibels = 0;
-  this.freqs = new Uint8Array(this.analyser.frequencyBinCount);
-  this.times = new Uint8Array(this.analyser.frequencyBinCount);
+  this.analyser.fftSize = FFT_SIZE;
+  this.analyser.smoothingTimeConstant = SMOOTHING;
+  
+  this.bandAnalyser.minDecibels = -120;
+  this.bandAnalyser.maxDecibels = 0;
+  this.bandAnalyser.fftSize = FFT_SIZE;
+  this.bandAnalyser.smoothingTimeConstant = SMOOTHING;
   
   this.playing = true;
-  
-  let _this = this;
   
   let merger = context.createChannelMerger(AUDIOS.length + 1);
   
@@ -68,25 +287,25 @@ function SpectralDisplay() {
   this.oscillator = context.createOscillator();
   this.oscillator.detune.value = 100;
   
-  oscillatorShape.addEventListener("change", function() {
-    _this.oscillator.type = oscillatorShape.value;
+  oscillatorShape.addEventListener("change", (e) => {
+    this.oscillator.type = e.target.value;
   });
   
   this.oscillatorGain = context.createGain();
   this.oscillator.connect(this.oscillatorGain);
-  function setOscillatorGain() {
-    _this.oscillatorGain.gain.value = sineVolControl.value;
+  let setOscillatorGain = () => {
+    this.oscillatorGain.gain.value = sineVolControl.value;
   }
   sineVolControl.addEventListener("change", setOscillatorGain);
   setOscillatorGain();
   
   this.oscillatorMute = context.createGain();
-  function sineMute(e) {
+  let sineMute = (e) => {
     if (sineControl.checked) {
-      _this.oscillatorMute.gain.value = 1;
+      this.oscillatorMute.gain.value = 1;
       
     } else {
-      _this.oscillatorMute.gain.value = 0;
+      this.oscillatorMute.gain.value = 0;
     }
   }
   this.oscillatorGain.connect(this.oscillatorMute);
@@ -94,100 +313,51 @@ function SpectralDisplay() {
   sineControl.addEventListener("click", sineMute);
   sineMute();
   
-  function sineFrequency() {
-    _this.oscillator.frequency.value = Math.pow(2, sineFreqControl.value / 10);
+  let sineFrequency = () => {
+    this.oscillator.frequency.value = Math.pow(2, sineFreqControl.value / 10);
   }
   sineFrequency();
   sineFreqControl.addEventListener("change", sineFrequency);
   
+  // band analysis
+  let FREQS = [63, 160, 400, 1000, 2500, 6250, 16000];
+  this.bandMerge = context.createChannelMerger(FREQS.length);
+
+  this.filts = [];
+  for (let i = 0; i < FREQS.length; i++) {
+    let filt = context.createBiquadFilter();
+    filt.type = "bandpass";
+    filt.frequency.value = FREQS[i];
+    filt.Q.value = Q;
+    merger.connect(filt);
+    filt.connect(this.bandMerge);
+    this.filts[i] = filt;
+  }
+
+  this.bandMerge.connect(this.bandAnalyser);
   merger.connect(this.analyser);
+  
   this.analyser.connect(context.destination);
   this.oscillator.start();
   
-  window.requestAnimationFrame(function() {
-    _this.draw();
-  });
+  this.historyDisplay = new HistoryDisplay(this.analyser, HIST_CANVAS);
+  this.analyserDisplay = new AnalyzerDisplay(this.analyser, BAR_CANVAS);
+  this.waveFormDisplay = new WaveFormDisplay(this.analyser, WAVE_CANVAS);
+  
+  this.bandAnalyserDisplay = new PeakDisplay2(this.bandAnalyser, FILT_CANVAS);
+  //this.bandWaveDisplay = new WaveFormDisplay(this.bandAnalyser, FILT_CANVAS);
+  
+  this.dislpays = [this.historyDisplay, this.analyserDisplay, this.waveFormDisplay, this.bandAnalyserDisplay];
+  
+  window.requestAnimationFrame(this.draw.bind(this));
 }
-
-SpectralDisplay.prototype.colorForVal = function (val) {
-  let percent = val / 255;
-  let hue = Math.max(240 - (300 * percent), 0);
-  let sat = 1 / (1 + Math.pow(Math.E, -25 * (percent - 0.15)));
-  let light = 0.5 / (1 + Math.pow(Math.E, -25 * (percent - 0.85))) + 0.5;
-  light = percent > MIN_VALUE ? Math.min(light, MAX_LIGHT) : 0;
-  //sat = 1;
-  return `hsl(${hue}, ${sat * 100}%, ${light * 90}%)`;
-}
-
-SpectralDisplay.prototype.colorForVal2 = function (val) {
-  let percent = val / 255;
-  let hue = Math.max(240 - (300 * percent), 0);
-  let sat = 1 / (1 + Math.pow(Math.E, -25 * (percent - 0.15)));
-  let light = 0.5 / (1 + Math.pow(Math.E, -25 * (percent - 0.85))) + 0.5;
-  return `hsl(${hue}, ${sat * 100}%, ${light * 50}%)`;
-}
-
-var x = 0;
 
 SpectralDisplay.prototype.draw = function () {
-  
   if (this.playing) {
-    /*
-    var data = HIST_CTX.getImageData(0, 0, WIDTH, HEIGHT);
-    HIST_CTX.fillstyle = "#000";
-    HIST_CTX.fillRect(0, 0, WIDTH, HEIGHT);
-    HIST_CTX.putImageData(data, 3, 0);
-    */
-    x++;
-    x %= WIDTH;
+    for (let i = 0; i < this.dislpays.length; i++) this.dislpays[i].render();
     
-    this.analyser.smoothingTimeConstant = SMOOTHING;
-    this.analyser.fftSize = FFT_SIZE;
     
-    this.analyser.getByteFrequencyData(this.freqs);
-    this.analyser.getByteTimeDomainData(this.times);
-    
-    HIST_CTX.fillStyle = "#f00";
-    HIST_CTX.fillRect(x + 1, 1, 1, HEIGHT);
-    
-    BAR_CTX.fillStyle = "#000";
-    BAR_CTX.fillRect(0, 0, HEIGHT * (BAR_WIDTH + BAR_SPACE) + BAR_SPACE, HEIGHT);
-    
-    WAVE_CTX.fillStyle = "#000";
-    WAVE_CTX.fillRect(0, 0, WIDTH, HEIGHT);
-    
-    for (let i = 0; i < this.analyser.frequencyBinCount; i++) {
-      let value = this.freqs[i];
-      let percent = value / 255;
-      let color = this.colorForVal(value);
-      HIST_CTX.fillStyle = color;
-      HIST_CTX.fillRect(x, HEIGHT - i, 1, 1);
-      BAR_CTX.fillStyle = color;
-      BAR_CTX.fillRect(i * (BAR_WIDTH + BAR_SPACE)+ BAR_SPACE, HEIGHT - (HEIGHT * percent), BAR_WIDTH, HEIGHT * percent);
-    }
-    
-    let thickness = WIDTH / (this.analyser.frequencyBinCount - 1);
-    let largest = 0.5;
-    WAVE_CTX.beginPath();
-    WAVE_CTX.moveTo(-1 * thickness, 0.5 * HEIGHT);
-    
-    for (let i = 0; i < this.analyser.frequencyBinCount; i++) {
-      let value = this.times[i];
-      let percent = value / 255;
-      if (Math.abs(value - 128) > largest) largest = Math.abs(value - 128);
-      WAVE_CTX.lineTo(i * thickness, percent * HEIGHT);
-    }
-    
-    let color = this.colorForVal2(largest * 2);
-    WAVE_CTX.strokeStyle = color;
-    WAVE_CTX.stroke();
-    
-    //TODO: use BiquadFilterNode to get high, low and mid sounds
-    
-    let _this = this;
-    window.requestAnimationFrame(function() {
-      _this.draw();
-    });
+    window.requestAnimationFrame(this.draw.bind(this));
   }
 }
 

@@ -10,6 +10,7 @@
       audio {
         display: inline-block;
         vertical-align: middle;
+        width: 25vw;
       }
       
       body {
@@ -21,7 +22,13 @@
   </head>
   <body>
     <div>
-      <h2>Music:</h2><audio src="./Track 3.mp3" controls></audio>
+      <h2>Music:</h2>
+      <div>
+        <audio src="Track 3.mp3" controls></audio>
+      </div>
+      <div>
+        <audio src="03 - Arena.mp3" controls></audio>
+      </div>
     </div>
     <div>
       <input type="checkbox" id="sine-control"/>
@@ -35,11 +42,12 @@
       </select>
       <label id="sine-freq-label"></label>
     </div>
-    <canvas id="history-canvas" style="height:128px; width:1024px"></canvas>
-    <canvas id="bar-canvas" style="height:128px; width:1024px"></canvas>
-    <canvas id="wave-canvas" style="height:128px; width:1024px"></canvas>
+    <canvas id="history-canvas" height="128" width="1024" style="height:128px; width:1024px"></canvas>
+    <canvas id="bar-canvas" height="128" width="1024" style="height:128px; width:1024px"></canvas>
+    <canvas id="wave-canvas" height="128" width="1024" style="height:128px; width:1024px"></canvas>
+    <canvas id="filt-canvas" height="128" width="1024" style="height:128px; width:1024px"></canvas>
     
-    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
-    <script src="/script.js"></script>
+    <script src="scripts/DataNodes.js"></script>
+    <script src="scripts/main.js"></script>
   </body>
 </html>
